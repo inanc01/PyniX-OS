@@ -18,9 +18,6 @@ jobs:
 
     - name: Install Alpine SDK & Build Tools
       run: |
-        # PyniX OS itself is Alpine-based, so the build host should be Alpine too -
-        # this avoids any apk.static / cross-distro workaround entirely and matches
-        # the v3.20 repos used later in the mkimage.sh call.
         apk update
         apk add --no-cache \
           alpine-sdk sudo bash git curl wget \
@@ -29,13 +26,13 @@ jobs:
     - name: Create Non-Root Builder User
       run: |
         set -e
-        # abuild/abuild-keygen refuse to run as root, and the container runs as root by
-        # default - so every abuild/mkimage step below runs as this "builder" user instead.
-        # The previous run failed because "adduser -D -G abuild builder" silently errored
-        # (no "abuild" group yet at that point / no set -e to catch it), so "builder" was
-        # never actually created and the later chown failed with "unknown user/group".
+        # 1. Önce builder kullanıcısını ve varsayılan builder grubunu oluşturuyoruz
+        adduser -D builder
+
+        # 2. abuild grubunu oluşturup builder kullanıcısını abuild grubuna ekliyoruz
         addgroup -S abuild 2>/dev/null || true
-        adduser -D -G abuild builder
+        addgroup builder abuild
+
         echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
         chown -R builder:builder "$GITHUB_WORKSPACE"
 
@@ -70,6 +67,9 @@ jobs:
                 "
         }
         EOF
+
+        # Profilimizi mkimage.sh scriptine dahil ediyoruz
+        sed -i '\''1s/^/source .\x2fmkimg.pynixos.sh\n/'\'' mkimage.sh
         '
 
     - name: Create Overlay Structures (Fastfetch, PPM & TUI Installer)
@@ -85,13 +85,13 @@ jobs:
         # 1. Fastfetch Configuration & ASCII
         cp pynix_ascii.txt overlay/usr/share/pynix-store/pynix_ascii.txt 2>/dev/null || true
 
-        # 1b. Logos (already running as builder, no sudo needed here)
+        # 1b. Logos
         cp "$GITHUB_WORKSPACE/config/pynix-logo.png" overlay/usr/share/pixmaps/pynix-logo.png 2>/dev/null || true
         cp "$GITHUB_WORKSPACE/config/store-logo.png" overlay/usr/share/pixmaps/store-logo.png 2>/dev/null || true
 
         cat << "EOF" > overlay/etc/skel/.config/fastfetch/config.jsonc
         {
-            "\$schema": "https://github.com",
+            "$schema": "https://github.com",
             "logo": {
                 "type": "file",
                 "source": "/usr/share/pynix-store/pynix_ascii.txt"
@@ -145,16 +145,16 @@ jobs:
             copyright)
                 echo "┌────────────────────────────────────────────────────────┐"
                 echo "│  ____               _lh  __  __   _                    │"
-                echo "│ |  _ \ _   _ _ __  (_) \/ /  | |    / \   ___  ___     │"
-                echo "│ | |_) | | | | '\''_ \ | |\  /   | |   / _ \ / __|/ __|    │"
-                echo "│ |  __/| |_| | | | || |/  \   | |__/ ___ \\__ \\__ \\      │"
+                echo "│ |  _ \ _   _ _ __  (_) \/ /  | |   / \   ___  ___      │"
+                echo "│ | |_) | | | | '\''_ \ | |\  /   | |  / _ \ / __|/ __|     │"
+                echo "│ |  __/| |_| | | | || |/  \   | |__/ ___ \\__ \\__ \      │"
                 echo "│ |_|    \__, |_| |_||_/_/\_\  |_____/_/   \_\___/___/   │"
                 echo "│        |___/                                           │"
                 echo "├────────────────────────────────────────────────────────┤"
-                echo "│ Proje: PyniX OS (TEKNOFEST 2026)                       │"
-                echo "│ Telif Hakkı: Copyright © 2026 İnanç İnce (PyniX LABS)  │"
-                echo "│ Lisans: GNU General Public License v3.0 (GPL-3.0)      │"
-                echo "│ Durum: Tüm Hakları Saklıdır.                           │"
+                echo "│ Proje: PyniX OS (TEKNOFEST 2026)                        │"
+                echo "│ Telif Hakkı: Copyright © 2026 İnanç İnce (PyniX LABS)   │"
+                echo "│ Lisans: GNU General Public License v3.0 (GPL-3.0)       │"
+                echo "│ Durum: Tüm Hakları Saklıdır.                            │"
                 echo "└────────────────────────────────────────────────────────┘"
                 ;;
             *)
