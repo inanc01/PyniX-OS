@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=PyniX OS Store
+Comment=PyniX OS Yazılım Merkezi
+Exec="/usr/share/pynix-store/PyniX OS Store"
+Icon=/usr/share/pixmaps/store-logo.png
+Terminal=false
+Categories=System;PackageManager;
+Keywords=store;app;pynix;mağaza;

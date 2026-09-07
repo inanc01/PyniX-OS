@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PyniX OS Welcome App
+Exec=bash -c 'if [ ! -f ~/.config/pynix_welcome_done ]; then mkdir -p ~/.config && touch ~/.config/pynix_welcome_done; "/usr/share/pynix-store/PyniX OS Welcome App"; fi'
+Icon=/usr/share/pixmaps/pynix-logo.png
+Terminal=false
+Categories=System;
+X-KDE-autostart-after=panel

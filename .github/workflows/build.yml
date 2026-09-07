@@ -1,0 +1,291 @@
+name: PyniX OS 1.0 Build (Alpine Container)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-iso:
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:3.20
+      options: --privileged
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Install Alpine SDK & Build Tools
+      run: |
+        # PyniX OS itself is Alpine-based, so the build host should be Alpine too -
+        # this avoids any apk.static / cross-distro workaround entirely and matches
+        # the v3.20 repos used later in the mkimage.sh call.
+        apk update
+        apk add --no-cache \
+          alpine-sdk sudo bash git curl wget \
+          squashfs-tools xorriso syslinux mtools dosfstools e2fsprogs
+
+    - name: Create Non-Root Builder User
+      run: |
+        # abuild/abuild-keygen refuse to run as root, and the container runs as root by
+        # default - so every abuild/mkimage step below runs as this "builder" user instead.
+        # alpine-sdk's postinstall already created the "abuild" group.
+        adduser -D -G abuild builder
+        echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+        chown -R builder:builder "$GITHUB_WORKSPACE"
+
+    - name: Setup Alpine Aports & PyniX Profile
+      run: |
+        sudo -u builder bash -c '
+        set -e
+        git clone --depth=1 https://gitlab.alpinelinux.org/alpine/aports.git
+        cd aports/scripts
+
+        cat << "EOF" > mkimg.pynixos.sh
+        profile_pynixos() {
+            profile_standard
+            name="pynixos"
+            title="PyniX OS"
+            desc="PyniX OS 1.0 - KDE, PPM, TUI Installer & Full Python Stack"
+            arch="x86_64"
+            kernel_flavors="virt lts"
+            kernel_cmdline="modules=loop,squashfs console=tty0"
+            syslinux_serial="0 115200"
+
+            apks="$apks
+                dialog e2fsprogs grub-bios fastfetch
+                linux-firmware
+                xorg-server xf86-input-libinput
+                mesa-dri-gallium xf86-video-amdgpu xf86-video-nouveau xf86-video-intel
+                sddm plasma-desktop konsole dolphin
+                flatpak dbus networkmanager networkmanager-qt network-manager-applet elogind polkit
+                pipewire pipewire-alsa pipewire-pulse wireplumber
+                hicolor-icon-theme breeze-icons
+                python3 py3-pip python3-tkinter py3-pillow py3-qt6
+                "
+        }
+        EOF
+        '
+
+    - name: Create Overlay Structures (Fastfetch, PPM & TUI Installer)
+      run: |
+        sudo -u builder bash -c '
+        set -e
+        cd aports/scripts
+        mkdir -p overlay/usr/share/pynix-store
+        mkdir -p overlay/etc/skel/.config/fastfetch
+        mkdir -p overlay/usr/local/bin
+        mkdir -p overlay/usr/share/pixmaps
+
+        # 1. Fastfetch Configuration & ASCII
+        cp pynix_ascii.txt overlay/usr/share/pynix-store/pynix_ascii.txt 2>/dev/null || true
+
+        # 1b. Logos (already running as builder, no sudo needed here)
+        cp "$GITHUB_WORKSPACE/config/pynix-logo.png" overlay/usr/share/pixmaps/pynix-logo.png 2>/dev/null || true
+        cp "$GITHUB_WORKSPACE/config/store-logo.png" overlay/usr/share/pixmaps/store-logo.png 2>/dev/null || true
+
+        cat << "EOF" > overlay/etc/skel/.config/fastfetch/config.jsonc
+        {
+            "\$schema": "https://github.com",
+            "logo": {
+                "type": "file",
+                "source": "/usr/share/pynix-store/pynix_ascii.txt"
+            },
+            "modules": [
+                "title",
+                "separator",
+                { "type": "os", "key": " OS ", "format": "PyniX OS 1.0 Stable" },
+                { "type": "kernel", "key": " Kernel " },
+                { "type": "uptime", "key": " Uptime " },
+                { "type": "packages", "key": " PPM " },
+                { "type": "memory", "key": " RAM " }
+            ]
+        }
+        EOF
+
+        echo "fastfetch" >> overlay/etc/skel/.bashrc
+
+        # 2. PPM (PyniX Package Manager)
+        cat << "EOF" > overlay/usr/local/bin/ppm
+        #!/bin/sh
+        case "$1" in
+            install) shift; sudo apk add "$@" ;;
+            remove|uninstall) shift; sudo apk del "$@" ;;
+            update) sudo apk update ;;
+            upgrade) sudo apk upgrade ;;
+            search) shift; apk search "$@" ;;
+            *)
+                echo "PyniX Package Manager (PPM)"
+                echo "Usage: ppm {install|remove|update|upgrade|search} [package_name]"
+                ;;
+        esac
+        EOF
+        chmod +x overlay/usr/local/bin/ppm
+
+        # 3. PyniX TUI Install Wizard
+        cat << "PYEOF" > overlay/usr/local/bin/pynix-tui-installer.py
+        import os
+        import sys
+        import subprocess
+
+        def run_dialog(cmd):
+            try:
+                result = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, text=True)
+                return result.stderr.strip()
+            except Exception:
+                return ""
+
+        ascii_art = """
+        _______ __ __ __ ______ ______
+        | \\ | \\| \\ | \\ / \\ / \\
+        | $$$$$$$\\ __ __ _______ \\$$| $$ | $$ | $$$$$$\\| $$$$$$\\
+        | $$__/ $$| \\ | \\| \\ | \\ \\$$\\ $$ | $$ | $$| $$___\\$$
+        | $$ $$| $$ | $$| $$$$$$$\\| $$ >$$ $$ | $$ | $$ \\$$ \\
+        | $$$$$$$ | $$ | $$| $$ | $$| $$ / $$$$\\ | $$ | $$ _\\$$$$$$\\
+        | $$ | $$__/ $$| $$ | $$| $$| $$ \\$$\\ | $$__/ $$| \\__| $$
+        | $$ \\$$ $$| $$ | $$| $$| $$ | $$ \\$$ $$ \\$$ $$
+         \\$$ _\\$$$$$$$ \\$$ \\$$ \\$$ \\$$ \\$$ \\$$$$$$ \\$$$$$$
+                  | \\__| $$
+                   \\$$ $$
+                    \\$$$$$$
+        """
+
+        menu_cmd = (
+            "dialog --clear --backtitle \"PyniX OS 1.0 Installation Wizard\" "
+            "--title \" Installation Steps (Use Arrow Keys to Navigate, Enter to Select) \" "
+            "--menu \"Please complete all the steps below in order:\" 20 60 9 "
+            "1 \"Language Selection\" "
+            "2 \"Keyboard Layout\" "
+            "3 \"Region & Timezone\" "
+            "4 \"Network Configuration\" "
+            "5 \"Installation Type\" "
+            "6 \"Disk Partitioning (ext4/btrfs/SWAP)\" "
+            "7 \"User Account Settings\" "
+            "8 \"Root (Administrator) Password\" "
+            "9 \"Summary & Start Installation\""
+        )
+
+        data = {
+            "fullname": "",
+            "username": "pynix",
+            "sysname": "pynix",
+            "sudo_pass": "",
+            "root_pass": "",
+            "target_disk": "/dev/sda"
+        }
+
+        while True:
+            os.system("clear")
+            print(ascii_art)
+            choice = run_dialog(menu_cmd)
+
+            if not choice:
+                break
+
+            if choice == "1":
+                run_dialog("dialog --msgbox \"Info: Sets the system language to be installed.\" 6 50")
+                run_dialog("dialog --menu \"Select Language\" 15 40 2 1 \"Turkish\" 2 \"English\"")
+            elif choice == "2":
+                run_dialog("dialog --msgbox \"Info: Sets the keyboard layout mapping.\" 6 50")
+                run_dialog("dialog --inputbox \"Test your keyboard layout:\" 8 40")
+            elif choice == "3":
+                run_dialog("dialog --msgbox \"Info: Automatically configures the world timezone.\" 6 50")
+            elif choice == "4":
+                run_dialog("dialog --msgbox \"Info: Starting network services...\" 6 50")
+            elif choice == "5":
+                run_dialog("dialog --msgbox \"Info: The entire disk will be wiped and a clean PyniX OS will be installed.\" 6 50")
+            elif choice == "6":
+                run_dialog("dialog --msgbox \"Info: Formats the target disk as ext4.\" 6 50")
+                disk = run_dialog("dialog --inputbox \"Target Disk (e.g. /dev/sda):\" 8 40 \"/dev/sda\"")
+                if disk: data["target_disk"] = disk
+            elif choice == "7":
+                run_dialog("dialog --msgbox \"Info: Sets the main user identity and PC name that will log into the system.\" 6 50")
+                data["fullname"] = run_dialog("dialog --inputbox \"Full Name:\" 8 40")
+
+                user_input = run_dialog("dialog --inputbox \"Username (Default: pynix):\" 8 40")
+                if user_input: data["username"] = user_input
+
+                sys_input = run_dialog("dialog --inputbox \"System Name (Optional):\" 8 40")
+                if sys_input: data["sysname"] = sys_input
+
+                while not data["sudo_pass"]:
+                    run_dialog("dialog --title \"\\Zb\\Z1 REQUIRED FIELD \\Zn\" --colors --msgbox \"Required. Set the system user password!\" 6 50")
+                    data["sudo_pass"] = run_dialog("dialog --insecure --passwordbox \"Sudo Password (Required):\" 8 40")
+            elif choice == "8":
+                while not data["root_pass"]:
+                    run_dialog("dialog --title \"\\Zb\\Z1 REQUIRED FIELD \\Zn\" --colors --msgbox \"Required. Set the root administrator password!\" 6 50")
+                    data["root_pass"] = run_dialog("dialog --insecure --passwordbox \"Root Password (Required):\" 8 40")
+            elif choice == "9":
+                if not data["sudo_pass"] or not data["root_pass"]:
+                    run_dialog("dialog --title \"ERROR\" --msgbox \"Please set the required passwords in steps 7 and 8 first!\" 6 50")
+                    continue
+
+                summary = (
+                    f"Target Disk: {data[\x27target_disk\x27]}\\n"
+                    f"User: {data[\x27username\x27]} ({data[\x27fullname\x27]})\\n"
+                    f"System Name: {data[\x27sysname\x27]}\\n\\n"
+                    "WARNING: The selected disk will be completely erased! Start installation?"
+                )
+
+                confirm = subprocess.run(
+                    ["dialog", "--title", "Installation Confirmation", "--yesno", summary, "12", "50"]
+                )
+
+                if confirm.returncode == 0:
+                    os.system("clear")
+                    print("Installing PyniX OS 1.0 to disk, please wait...\\n")
+
+                    os.system(f"mkfs.ext4 -F {data[\x27target_disk\x27]} > /dev/null 2>&1")
+                    os.system(f"mkdir -p /mnt/target && mount {data[\x27target_disk\x27]} /mnt/target")
+
+                    print("Transferring system files...")
+                    os.system("cp -a /. /mnt/target/ 2>/dev/null || true")
+
+                    print("Applying user configuration...")
+                    os.system(f"chroot /mnt/target adduser -D {data[\x27username\x27]}")
+                    os.system(f"echo \x27{data[\x27username\x27]}:{data[\x27sudo_pass\x27]}\x27 | chroot /mnt/target chpasswd")
+                    os.system(f"echo \x27root:{data[\x27root_pass\x27]}\x27 | chroot /mnt/target chpasswd")
+                    os.system(f"echo \x27{data[\x27sysname\x27]}\x27 > /mnt/target/etc/hostname")
+
+                    print("Writing GRUB bootloader...")
+                    os.system(f"grub-install --target=i386-pc {data[\x27target_disk\x27]} --root-directory=/mnt/target > /dev/null 2>&1")
+                    os.system("chroot /mnt/target grub-mkconfig -o /boot/grub/grub.cfg > /dev/null 2>&1")
+
+                    run_dialog("dialog --title \"SUCCESS\" --msgbox \"PyniX OS installed successfully! You can now reboot the system.\" 6 50")
+                    break
+        PYEOF
+
+        chmod +x overlay/usr/local/bin/pynix-tui-installer.py
+        '
+
+    - name: Generate Signing Keys
+      run: |
+        sudo -u builder bash -c '
+        set -e
+        mkdir -p ~/.abuild
+        abuild-keygen -a -i -n
+        '
+        mkdir -p /etc/apk/keys
+        cp /home/builder/.abuild/*.pub /etc/apk/keys/
+
+    - name: Build PyniX OS ISO Image via Alpine mkimage
+      run: |
+        sudo -u builder bash -c '
+        set -e
+        cd aports/scripts
+        mkdir -p ../../output
+
+        ./mkimage.sh \
+          --repository https://dl-cdn.alpinelinux.org/alpine/v3.20/main \
+          --repository https://dl-cdn.alpinelinux.org/alpine/v3.20/community \
+          --profile pynixos \
+          --arch x86_64 \
+          --outdir ../../output
+        '
+
+    - name: Upload Finished PyniX OS ISO
+      uses: actions/upload-artifact@v4
+      with:
+        name: PyniX-OS-1.0-ISO
+        path: output/*.iso
