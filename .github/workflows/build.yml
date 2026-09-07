@@ -28,9 +28,13 @@ jobs:
 
     - name: Create Non-Root Builder User
       run: |
+        set -e
         # abuild/abuild-keygen refuse to run as root, and the container runs as root by
         # default - so every abuild/mkimage step below runs as this "builder" user instead.
-        # alpine-sdk's postinstall already created the "abuild" group.
+        # The previous run failed because "adduser -D -G abuild builder" silently errored
+        # (no "abuild" group yet at that point / no set -e to catch it), so "builder" was
+        # never actually created and the later chown failed with "unknown user/group".
+        addgroup -S abuild 2>/dev/null || true
         adduser -D -G abuild builder
         echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
         chown -R builder:builder "$GITHUB_WORKSPACE"
@@ -123,7 +127,44 @@ jobs:
         EOF
         chmod +x overlay/usr/local/bin/ppm
 
-        # 3. PyniX TUI Install Wizard
+        # 3. PyniX info / copyright command
+        cat << "EOF" > overlay/usr/local/bin/PyniX
+        #!/bin/bash
+        # ------------------------------------------------------------------
+        # Copyright © 2026 İnanç İnce (PyniX LABS). All rights reserved.
+        # Licensed under the GNU General Public License, Version 3.0.
+        # ------------------------------------------------------------------
+
+        case "$1" in
+            info)
+                echo "Proje Sahibi: İnanç İnce"
+                echo "PyniX Sürümü: PyniX 1.0"
+                echo "PPM Sürümü: 1.0"
+                echo "Yardımcılar: Eren Mut"
+                ;;
+            copyright)
+                echo "┌────────────────────────────────────────────────────────┐"
+                echo "│  ____               _lh  __  __   _                    │"
+                echo "│ |  _ \ _   _ _ __  (_) \/ /  | |    / \   ___  ___     │"
+                echo "│ | |_) | | | | '\''_ \ | |\  /   | |   / _ \ / __|/ __|    │"
+                echo "│ |  __/| |_| | | | || |/  \   | |__/ ___ \\__ \\__ \\    │"
+                echo "│ |_|    \__, |_| |_||_/_/\_\  |_____/_/   \_\___/___/    │"
+                echo "│        |___/                                           │"
+                echo "├────────────────────────────────────────────────────────┤"
+                echo "│ Proje: PyniX OS (TEKNOFEST 2026)                       │"
+                echo "│ Telif Hakkı: Copyright © 2026 İnanç İnce (PyniX LABS)   │"
+                echo "│ Lisans: GNU General Public License v3.0 (GPL-3.0)      │"
+                echo "│ Durum: Tüm Hakları Saklıdır.                           │"
+                echo "└────────────────────────────────────────────────────────┘"
+                ;;
+            *)
+                echo "Eksik veya hatalı komut. Kullanım: PyniX {info|copyright}"
+                ;;
+        esac
+        EOF
+        chmod +x overlay/usr/local/bin/PyniX
+
+        # 4. PyniX TUI Install Wizard
         cat << "PYEOF" > overlay/usr/local/bin/pynix-tui-installer.py
         import os
         import sys
