@@ -36,26 +36,25 @@ jobs:
         echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
         chown -R builder:builder "$GITHUB_WORKSPACE"
 
-    - name: Setup Alpine Aports & PyniX Profile
+        - name: Setup Alpine Aports & PyniX Profile
       run: |
-        sudo -H -u builder bash -c '
-        set -e
-        git clone --depth=1 https://gitlab.alpinelinux.org/alpine/aports.git
+        # 1. GitHub yansısından aports deposunu EKSİKSİZ adresiyle çekiyoruz
+        git clone --depth=1 https://github.com
         cd aports/scripts
 
-        cat << "EOF" > mkimg.pynixos.sh
+        # 2. PyniX profil dosyamızı oluşturuyoruz
+        cat << 'EOF' > mkimg.pynixos.sh
         profile_pynixos() {
             profile_standard
             name="pynixos"
             title="PyniX OS"
-            desc="PyniX OS 1.0 - KDE, PPM, TUI Installer & Full Python Stack"
+            desc="PyniX OS 1.0 - KDE, Flatpak, PipeWire & Full Python Stack"
             arch="x86_64"
             kernel_flavors="virt lts"
-            kernel_cmdline="modules=loop,squashfs console=tty0"
+            kernel_cmdline="modules=loop,squashfs console=tty0 init=/usr/local/bin/pynix-init"
             syslinux_serial="0 115200"
 
             apks="$apks
-                dialog e2fsprogs grub-bios fastfetch
                 linux-firmware
                 xorg-server xf86-input-libinput
                 mesa-dri-gallium xf86-video-amdgpu xf86-video-nouveau xf86-video-intel
@@ -63,14 +62,14 @@ jobs:
                 flatpak dbus networkmanager networkmanager-qt network-manager-applet elogind polkit
                 pipewire pipewire-alsa pipewire-pulse wireplumber
                 hicolor-icon-theme breeze-icons
-                python3 py3-pip python3-tkinter py3-pillow py3-qt6
+                python3 py3-pip python3-tkinter py3-pillow py3-qt6 dialog bash
                 "
         }
         EOF
 
-        # Profilimizi mkimage.sh scriptine dahil ediyoruz
-        sed -i '\''1s/^/source .\x2fmkimg.pynixos.sh\n/'\'' mkimage.sh
-        '
+        # 3. mkimage.sh script'inin en başına git ve bizim profilimizi zorla dahil et!
+        sed -i '1s/^/source .\x2fmkimg.pynixos.sh\n/' mkimage.sh
+        chmod +x mkimg.pynixos.sh
 
     - name: Create Overlay Structures (Fastfetch, PPM & TUI Installer)
       run: |
