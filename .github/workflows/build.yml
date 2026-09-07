@@ -41,7 +41,7 @@ jobs:
 
     - name: Setup Alpine Aports & PyniX Profile
       run: |
-        sudo -u builder bash -c '
+        sudo -H -u builder bash -c '
         set -e
         git clone --depth=1 https://gitlab.alpinelinux.org/alpine/aports.git
         cd aports/scripts
@@ -74,7 +74,7 @@ jobs:
 
     - name: Create Overlay Structures (Fastfetch, PPM & TUI Installer)
       run: |
-        sudo -u builder bash -c '
+        sudo -H -u builder bash -c '
         set -e
         cd aports/scripts
         mkdir -p overlay/usr/share/pynix-store
@@ -302,7 +302,7 @@ jobs:
 
     - name: Generate Signing Keys
       run: |
-        sudo -u builder bash -c '
+        sudo -H -u builder bash -c '
         set -e
         mkdir -p ~/.abuild
         abuild-keygen -a -i -n
@@ -312,7 +312,7 @@ jobs:
 
     - name: Build PyniX OS ISO Image via Alpine mkimage
       run: |
-        sudo -u builder bash -c '
+        sudo -H -u builder bash -c '
         set -e
         cd aports/scripts
         mkdir -p ../../output
